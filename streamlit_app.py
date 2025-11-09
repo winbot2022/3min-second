@@ -4,6 +4,7 @@
 # - Google Sheets 自動保存（なければ CSV）
 # - サイレント保存（利用者に保存メッセージを出さない）
 # - 管理者モード（?admin=1 または Secrets: ADMIN_MODE="1"）でイベント確認
+# - responsesシートのヘッダー順に完全同期（HEADER_ORDER）
 
 import os
 import io
@@ -44,6 +45,27 @@ LOGO_LOCAL = "assets/CImark.png"
 LOGO_URL   = "https://victorconsulting.jp/wp-content/uploads/2025/10/CImark.png"
 CTA_URL    = "https://victorconsulting.jp/spot-diagnosis/"
 OPENAI_MODEL = "gpt-4o-mini"
+APP_VERSION  = "v1.0.0"
+
+# responses シートの1行目（ヘッダー）に合わせる
+HEADER_ORDER = [
+    "timestamp",        # A
+    "company",          # B
+    "email",            # C
+    "category_scores",  # D  ← 5カテゴリ平均をJSON文字列で
+    "total_score",      # E  ← overall_avg
+    "type_label",       # F  ← main_type
+    "ai_comment",       # G
+    "utm_source",       # H
+    "utm_campaign",     # I
+    "pdf_url",          # J  ← いまは空。将来外部ストレージURLに
+    "app_version",      # K
+    "status",           # L  ← "ok"/"error"など
+    "ai_comment_len",   # M
+    "risk_level",       # N  ← 低/中/高
+    "entry_check",      # O  ← "OK"
+    "report_date"       # P  ← YYYY-MM-DD
+]
 
 # 日本時間
 JST = timezone(timedelta(hours=9))
@@ -163,7 +185,7 @@ def _report_event(level: str, message: str, payload: dict | None = None):
                 ws.append_row(list(evt.keys()))
             ws.append_row([evt[k] for k in evt.keys()])
             wrote = True
-    except Exception as e:
+    except Exception:
         wrote = False
     # CSVフォールバック
     if not wrote:
@@ -186,10 +208,16 @@ def try_append_to_google_sheets(row_dict: dict, spreadsheet_id: str, service_jso
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     gc = gspread.authorize(creds)
     sh = gc.open_by_key(spreadsheet_id)
-    ws = sh.sheet1
-    if not ws.get_all_values():
-        ws.append_row(list(row_dict.keys()))
-    ws.append_row([row_dict[k] for k in row_dict.keys()])
+    ws = sh.sheet1  # responses
+
+    # 初回ヘッダーが未設定なら自動作成（安全網）
+    values = ws.get_all_values()
+    if not values:
+        ws.append_row(HEADER_ORDER)
+
+    # ヘッダー順に並び替えて追記
+    record = [row_dict.get(k, "") for k in HEADER_ORDER]
+    ws.append_row(record, value_input_option="USER_ENTERED")
 
 def fallback_append_to_csv(row_dict: dict, csv_path="responses.csv"):
     df = pd.DataFrame([row_dict])
@@ -622,21 +650,47 @@ if st.session_state.get("result_ready"):
     fname = f"VC_診断_{company or '匿名'}_{datetime.now(JST).strftime('%Y%m%d_%H%M')}.pdf"
     st.download_button("📄 PDFをダウンロード", data=pdf_bytes, file_name=fname, mime="application/pdf")
 
-    # 自動保存（サイレント）
+    # ======== シート書き込み用データ（ヘッダー順に整形） ========
+    category_scores = {
+        "在庫・運搬": float(df.loc[df["カテゴリ"]=="在庫・運搬","平均スコア"].values[0]),
+        "人材・技能承継": float(df.loc[df["カテゴリ"]=="人材・技能承継","平均スコア"].values[0]),
+        "原価意識・改善文化": float(df.loc[df["カテゴリ"]=="原価意識・改善文化","平均スコア"].values[0]),
+        "生産計画・変動対応": float(df.loc[df["カテゴリ"]=="生産計画・変動対応","平均スコア"].values[0]),
+        "DX・情報共有": float(df.loc[df["カテゴリ"]=="DX・情報共有","平均スコア"].values[0]),
+    }
+    category_scores_str = json.dumps(category_scores, ensure_ascii=False)
+
+    def to_risk_level(total: float) -> str:
+        if total < 2.0:
+            return "高リスク"
+        elif total < 3.5:
+            return "中リスク"
+        else:
+            return "低リスク"
+
+    pdf_persist_url = ""  # 将来の外部保存連携用
+    comment_text = st.session_state["ai_comment"] or ""
+    comment_len = len(comment_text)
+    entry_check = "OK"
+    report_date = datetime.now(JST).strftime("%Y-%m-%d")
+
     row = {
-        "timestamp": datetime.now(JST).isoformat(timespec="seconds"),
-        "company": company, "email": email,
-        "signal": signal[0], "main_type": main_type,
-        "overall_avg": f"{overall_avg:.2f}",
-        "inv_avg":   f"{df.loc[df['カテゴリ']=='在庫・運搬','平均スコア'].values[0]:.2f}",
-        "skills_avg":f"{df.loc[df['カテゴリ']=='人材・技能承継','平均スコア'].values[0]:.2f}",
-        "cost_avg":  f"{df.loc[df['カテゴリ']=='原価意識・改善文化','平均スコア'].values[0]:.2f}",
-        "plan_avg":  f"{df.loc[df['カテゴリ']=='生産計画・変動対応','平均スコア'].values[0]:.2f}",
-        "dx_avg":    f"{df.loc[df['カテゴリ']=='DX・情報共有','平均スコア'].values[0]:.2f}",
-        "ai_comment": st.session_state["ai_comment"] or "",
-        "utm_source": st.session_state["utm_source"],
-        "utm_medium": st.session_state["utm_medium"],
-        "utm_campaign": st.session_state["utm_campaign"],
+        "timestamp":   datetime.now(JST).isoformat(timespec="seconds"),
+        "company":     company,
+        "email":       email,
+        "category_scores": category_scores_str,
+        "total_score": f"{overall_avg:.2f}",
+        "type_label":  main_type,
+        "ai_comment":  comment_text,
+        "utm_source":  st.session_state.get("utm_source",""),
+        "utm_campaign":st.session_state.get("utm_campaign",""),
+        "pdf_url":     pdf_persist_url,
+        "app_version": APP_VERSION,
+        "status":      "ok",
+        "ai_comment_len": str(comment_len),
+        "risk_level":  to_risk_level(overall_avg),
+        "entry_check": entry_check,
+        "report_date": report_date,
     }
     auto_save_row(row)
 
@@ -670,6 +724,7 @@ if ADMIN_MODE:
                 st.dataframe(df_evt, use_container_width=True)
             else:
                 st.info("イベントログはまだありません。")
+
 
 
 
