@@ -269,10 +269,18 @@ def decide_type(scores: Dict[str, float]) -> str:
 # ========= 相談員データ =========
 
 class Consultant:
-    def __init__(self, cid: str, name: str, title: str,
-                 bio: str, specialties: List[str],
-                 diagnosis_cases: int, contact_url: str, photo: str | None = None):
-        self.id = cid
+    def __init__(
+        self,
+        id: str,                 # ← cid を id に変更
+        name: str,
+        title: str,
+        bio: str,
+        specialties: List[str],
+        diagnosis_cases: int,
+        contact_url: str,
+        photo: str = None,       # Pythonバージョン配慮で | None は使わない方が安全
+    ):
+        self.id = id
         self.name = name
         self.title = title
         self.bio = bio
