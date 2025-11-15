@@ -1,1 +1,1 @@
-# victorconsulting-3min-power
+# 3min-second-career-diagnosis
