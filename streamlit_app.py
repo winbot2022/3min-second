@@ -576,7 +576,7 @@ if "result_type" in st.session_state:
     scores = st.session_state["scores"]
     ai_comment = st.session_state["ai_comment"]
 
-　　TYPE_LABEL = {
+    TYPE_LABEL = {
     "R": "Reframe（ゆるやか転身・模索型）",
     "S": "Specialist（専門深化・強み型）",
     "P": "Portfolio（複業・ハイブリッド型）",
