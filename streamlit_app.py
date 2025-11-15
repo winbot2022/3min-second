@@ -576,8 +576,15 @@ if "result_type" in st.session_state:
     scores = st.session_state["scores"]
     ai_comment = st.session_state["ai_comment"]
 
+　　TYPE_LABEL = {
+    "R": "Reframe（ゆるやか転身・模索型）",
+    "S": "Specialist（専門深化・強み型）",
+    "P": "Portfolio（複業・ハイブリッド型）",
+    "I": "Independent（独立・プロ型）",
+    }
+    
     st.header("2. あなたの診断結果")
-    st.subheader(f"タイプ：{result_type}（{TYPE_TEXT[result_type][:10]}…）")
+    st.subheader(f"タイプ：{TYPE_LABEL[result_type]}")
     st.write(TYPE_TEXT[result_type])
 
     # ===== 3つの側面＋線分＋現在地だけ（数値は見せない） =====
