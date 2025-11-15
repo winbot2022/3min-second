@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-# 3分セカンドキャリア診断 v0.2
+# 3分セカンドキャリア診断 v0.3
 # - 10問（5段階） → 3軸＋行動意欲スコア
 # - 4タイプ（S/R/P/I）
 # - 完全匿名（会社名・メール・年齢・属性 一切なし）
-# - ChatGPT APIで約400字コメント生成
+# - ChatGPT APIで約400字コメント生成（※AIコメント内にスコア・点数は出さない）
 # - Google Sheets or CSV へログ保存（ai_comment全文も含む）
 # - 相談員カード（診断件数付き）＋クリックログ
-# - 3軸診断結果を「線分＋現在地の一点」表示に変更（数値はユーザーに見せない）
+# - 3軸診断結果を「線分＋現在地の一点」表示（数値はユーザーに見せない）
 
 import os
 import json
@@ -20,7 +20,7 @@ from google.oauth2.service_account import Credentials
 
 # ========= 時刻・定数 =========
 JST = timezone(timedelta(hours=9))
-APP_VERSION = "second-career-v0.2"
+APP_VERSION = "second-career-v0.3"
 OPENAI_MODEL = "gpt-4o-mini"
 
 ANSWER_HEADER = [
@@ -164,6 +164,7 @@ def generate_ai_comment(result_type: str, scores: Dict[str, float], session_id: 
         report_event("WARN", "OPENAI_API_KEY not set", {})
         return None
 
+    # ★ ここで「スコア・点数・数値は出さない」ように明示
     system_prompt = (
         "あなたは40〜50代の会社員・管理職向けに、"
         "セカンドキャリアを一緒に考えるキャリアアドバイザーです。"
@@ -172,19 +173,27 @@ def generate_ai_comment(result_type: str, scores: Dict[str, float], session_id: 
         "医療・投資・法律などの具体アドバイスには踏み込まず、"
         "自己理解を深めるための示唆にとどめてください。"
         "400字前後の日本語で書いてください。"
+        "文章の中では、数値スコアや「◯点」「スコア」「レベル」「評価」など、"
+        "点数や評価を連想させる言葉は一切使わないでください。"
     )
 
+    # 数値はあくまで「裏側の情報」として渡しつつ、
+    # 出力に出さないように強く指示
     user_prompt = (
-        f"診断結果はタイプ: {result_type} です。\n"
-        f"スコアは以下の通りです。\n"
+        "以下は診断の内部情報です。これらの数値や『スコア』『点数』という言葉は、"
+        "出力する文章の中には一切書かないでください。"
+        "あくまで、傾向をあなたが理解するためだけの材料です。\n\n"
+        f"診断タイプ: {result_type}\n"
         f"- 挑戦志向（challenge）: {scores['challenge']:.1f}\n"
         f"- 自律・独立志向（autonomy）: {scores['autonomy']:.1f}\n"
         f"- ポートフォリオ志向（portfolio）: {scores['portfolio']:.1f}\n"
         f"- 行動意欲（action）: {scores['action']:.1f}\n\n"
-        "この結果を踏まえて、本人が自分のこれまでのキャリアを肯定しつつ、"
+        "この情報をもとに、本人が自分のこれまでのキャリアを肯定しつつ、"
         "今後の選択肢を前向きに考えられるようなコメントを書いてください。"
         "『あなたは〜です』と決めつけすぎない表現でお願いします。"
-        f"\nセッションID: {session_id}（ログ用、文中に繰り返す必要はありません）"
+        "また、「高い・低い」などの優劣を強く感じさせる表現は避け、"
+        "その人なりのペースやタイミングを尊重する書き方にしてください。"
+        f"\nセッションID: {session_id}（ログ用、文中に書く必要はありません）"
     )
 
     mode, client = _openai_client(api_key)
@@ -366,10 +375,10 @@ st.markdown(
         font-weight: 500 !important;
     }
 
-    /* ボタン */
+    /* ボタン：文字色を白で固定 */
     div.stButton > button {
         background-color: #00796b;
-        color: white;
+        color: #ffffff !important;
         border-radius: 999px;
         border: none;
         padding: 0.4rem 1.3rem;
@@ -377,6 +386,7 @@ st.markdown(
     }
     div.stButton > button:hover {
         background-color: #00695c;
+        color: #ffffff !important;
     }
 
     /* expander ヘッダー */
@@ -632,6 +642,7 @@ if "result_type" in st.session_state:
 
 else:
     st.caption("全ての質問に回答したあと、「診断する」ボタンを押してください。")
+
 
 
 
