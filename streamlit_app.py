@@ -375,30 +375,31 @@ st.markdown(
         font-weight: 500 !important;
     }
 
-    /* 🔸ボタン：文字色を白で強制（すべての button を対象） */
-    .stApp button {
-        color: #ffffff !important;
+   /* ========================== */
+    /*     ボタン（白背景）       */
+    /* ========================== */
+
+    /* すべてのボタンをこのスタイルに */
+    button, div.stButton > button {
+        background-color: #ffffff !important;
+        color: #00695c !important;
+        border: 2px solid #00695c !important;
+        border-radius: 999px !important;
+        padding: 0.45rem 1.4rem !important;
+        font-weight: 600 !important;
     }
 
-    /* メインのアクションボタンのスタイル */
-    div.stButton > button {
-        background-color: #00796b;
-        border-radius: 999px;
-        border: none;
-        padding: 0.4rem 1.3rem;
-        font-weight: 600;
-    }
-    div.stButton > button:hover {
-        background-color: #00695c;
+    /* ホバー時：少しミント色に */
+    button:hover, div.stButton > button:hover {
+        background-color: #e0f4ee !important;
+        border-color: #005247 !important;
+        color: #004d40 !important;
     }
 
-    /* expander ヘッダー */
-    .streamlit-expanderHeader {
-        font-weight: 600;
-        color: #004d40;
-    }
+    /* ========================== */
+    /*    線分＋ポイント（前回）    */
+    /* ========================== */
 
-    /* 線分＋現在地点マーカー */
     .line-container {
         width: 100%;
         height: 22px;
@@ -411,7 +412,7 @@ st.markdown(
         left: 0;
         width: 100%;
         height: 4px;
-        background-color: #b5e6d4;
+        background-color: #d5e8e2;
         transform: translateY(-50%);
         border-radius: 2px;
     }
@@ -420,10 +421,11 @@ st.markdown(
         top: 50%;
         width: 16px;
         height: 16px;
-        background-color: #00796b;
+        background-color: #00695c;
         border-radius: 50%;
         transform: translate(-50%, -50%);
     }
+
     </style>
     """,
     unsafe_allow_html=True,
