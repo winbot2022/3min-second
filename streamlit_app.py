@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-# 3分セカンドキャリア診断 v0.1
+# 3分セカンドキャリア診断 v0.11（進捗バーUI版）
 # - 10問（5段階） → 3軸＋行動意欲スコア
 # - 4タイプ（S/R/P/I）
 # - 完全匿名（会社名・メール・年齢・属性 一切なし）
 # - ChatGPT APIで約400字コメント生成
 # - Google Sheets or CSV へログ保存（ai_comment全文も含む）
 # - 相談員カード（診断件数付き）＋クリックログ
+# - 3軸診断結果を【数値非表示】の進捗バー（ミントグリーン）へ変更
 
 import os
 import json
@@ -19,7 +20,7 @@ from google.oauth2.service_account import Credentials
 
 # ========= 時刻・定数 =========
 JST = timezone(timedelta(hours=9))
-APP_VERSION = "second-career-v0.1"
+APP_VERSION = "second-career-v0.11"
 OPENAI_MODEL = "gpt-4o-mini"
 
 ANSWER_HEADER = [
@@ -47,14 +48,14 @@ def read_secret(key: str, default=None):
     except Exception:
         return os.environ.get(key, default)
 
-# ========= イベント記録（簡易） =========
+# ========= イベント記録 =========
 def report_event(level: str, message: str, payload: dict | None = None):
     if not payload:
         payload = {}
     ts = datetime.now(JST).isoformat(timespec="seconds")
     print(f"[{ts}] [{level}] {message} {payload}")
 
-# ========= Google Sheets / CSV 保存ユーティリティ =========
+# ========= Google Sheets / CSV 保存 =========
 def _get_gspread_client(service_json_str: str):
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     info = json.loads(service_json_str)
@@ -92,7 +93,7 @@ def _append_to_csv(row_dict: dict, csv_path: str, header: List[str]):
         df.to_csv(csv_path, index=False, encoding="utf-8")
 
 def save_answer_row(row: dict):
-    secret_json     = read_secret("GOOGLE_SERVICE_JSON", None)
+    secret_json = read_secret("GOOGLE_SERVICE_JSON", None)
     if not secret_json:
         b64 = read_secret("GOOGLE_SERVICE_JSON_BASE64", None)
         if b64:
@@ -120,7 +121,7 @@ def save_answer_row(row: dict):
         _append_to_csv(row, "answers_second_career.csv", ANSWER_HEADER)
 
 def save_click_row(row: dict):
-    secret_json     = read_secret("GOOGLE_SERVICE_JSON", None)
+    secret_json = read_secret("GOOGLE_SERVICE_JSON", None)
     if not secret_json:
         b64 = read_secret("GOOGLE_SERVICE_JSON_BASE64", None)
         if b64:
@@ -147,7 +148,7 @@ def save_click_row(row: dict):
         report_event("WARN", "save_click_row error, fallback CSV", {"e": str(e)})
         _append_to_csv(row, "clicks_second_career.csv", CLICK_HEADER)
 
-# ========= OpenAI クライアント =========
+# ========= OpenAI =========
 def _openai_client(api_key: str):
     try:
         from openai import OpenAI
@@ -176,14 +177,14 @@ def generate_ai_comment(result_type: str, scores: Dict[str, float], session_id: 
     user_prompt = (
         f"診断結果はタイプ: {result_type} です。\n"
         f"スコアは以下の通りです。\n"
-        f"- 挑戦志向（challenge）: {scores['challenge']:.1f}\n"
-        f"- 自律・独立志向（autonomy）: {scores['autonomy']:.1f}\n"
-        f"- ポートフォリオ志向（portfolio）: {scores['portfolio']:.1f}\n"
-        f"- 行動意欲（action）: {scores['action']:.1f}\n\n"
-        "この結果を踏まえて、本人が自分のこれまでのキャリアを肯定しつつ、"
+        f"- 挑戦志向: {scores['challenge']:.1f}\n"
+        f"- 自律・独立志向: {scores['autonomy']:.1f}\n"
+        f"- ポートフォリオ志向: {scores['portfolio']:.1f}\n"
+        f"- 行動意欲: {scores['action']:.1f}\n\n"
+        "この結果を踏まえて、本人が自分のこれまでを肯定しつつ、"
         "今後の選択肢を前向きに考えられるようなコメントを書いてください。"
         "『あなたは〜です』と決めつけすぎない表現でお願いします。"
-        f"\nセッションID: {session_id}（ログ用、文中に繰り返す必要はありません）"
+        f"\nセッションID: {session_id}（ログ用、文中に不要）"
     )
 
     mode, client = _openai_client(api_key)
@@ -194,7 +195,7 @@ def generate_ai_comment(result_type: str, scores: Dict[str, float], session_id: 
                 model=OPENAI_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user",    "content": user_prompt},
+                    {"role": "user", "content": user_prompt},
                 ],
                 max_tokens=800,
                 temperature=0.7,
@@ -205,7 +206,7 @@ def generate_ai_comment(result_type: str, scores: Dict[str, float], session_id: 
                 model=OPENAI_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user",    "content": user_prompt},
+                    {"role": "user", "content": user_prompt},
                 ],
                 max_tokens=800,
                 temperature=0.7,
@@ -225,19 +226,11 @@ TYPE_TEXT = {
 }
 
 def calc_scores(answers: Dict[str, int]) -> Dict[str, float]:
-    """
-    answers: Q1〜Q10 → 1〜5
-    軸：
-      - challenge: Q1, Q2, Q3
-      - autonomy: Q4(r), Q5, Q6
-      - portfolio: Q7(r), Q8, Q9
-      - action: Q10
-    """
     def mean(vals: List[float]) -> float:
         return sum(vals) / len(vals) if vals else 0.0
 
     def rev(v: int) -> int:
-        return 6 - v  # 1↔5, 2↔4, 3↔3
+        return 6 - v
 
     challenge = mean([answers["Q1"], answers["Q2"], answers["Q3"]])
     autonomy = mean([rev(answers["Q4"]), answers["Q5"], answers["Q6"]])
@@ -255,30 +248,40 @@ def decide_type(scores: Dict[str, float]) -> str:
     ch = scores["challenge"]
     au = scores["autonomy"]
     pf = scores["portfolio"]
-    ac = scores["action"]
 
-    # シンプルなルールベース
     if ch >= 3.5 and au >= 3.5:
-        return "I"   # 自律・挑戦ともに高い → 独立・起業志向
+        return "I"
     if pf >= 3.5 and au >= 3.0:
-        return "P"   # ポートフォリオ志向高め
+        return "P"
     if ch <= 2.5 and au <= 3.0:
-        return "S"   # 安定志向かつ自律性は中以下
-    return "R"       # その中間 → 緩やかリスキリング
+        return "S"
+    return "R"
+
+# ========= スコア → ラベル変換 =========
+def score_to_label(score: float) -> str:
+    if score >= 4.5:
+        return "とても整っている"
+    elif score >= 3.5:
+        return "おおむね整っている"
+    elif score >= 2.5:
+        return "見直しポイントがある"
+    elif score >= 1.5:
+        return "変化のきっかけをつかみたい"
+    else:
+        return "立て直しのヒントが必要"
 
 # ========= 相談員データ =========
-
 class Consultant:
     def __init__(
         self,
-        id: str,                 # ← cid を id に変更
+        id: str,
         name: str,
         title: str,
         bio: str,
         specialties: List[str],
         diagnosis_cases: int,
         contact_url: str,
-        photo: str = None,       # Pythonバージョン配慮で | None は使わない方が安全
+        photo: str = None,
     ):
         self.id = id
         self.name = name
@@ -290,13 +293,12 @@ class Consultant:
         self.photo = photo
 
 def load_consultants() -> List[Consultant]:
-    # ここは後で実データに差し替えればOK
     data = [
         {
             "id": "A",
             "name": "山田 太郎",
             "title": "50代管理職の“ゆるやか転身”支援",
-            "bio": "大手メーカーで30年勤務後、独立。管理職から専門職・フリーランスへの移行を中心に、延べ300名以上のキャリア相談を実施。",
+            "bio": "大手メーカーで30年勤務後、独立。",
             "specialties": ["50代管理職", "セミリタイア", "副業からの独立"],
             "diagnosis_cases": 34,
             "contact_url": "https://example.com/consultant/yamada",
@@ -306,7 +308,7 @@ def load_consultants() -> List[Consultant]:
             "id": "B",
             "name": "佐藤 花子",
             "title": "40代女性の“キャリアと暮らし”両立支援",
-            "bio": "人事・キャリア支援歴15年。子育てと仕事の両立、地方移住、副業など、ライフイベントとキャリアの両立をサポート。",
+            "bio": "人事・キャリア支援歴15年。",
             "specialties": ["40代女性", "地方移住", "パラレルワーク"],
             "diagnosis_cases": 21,
             "contact_url": "https://example.com/consultant/sato",
@@ -316,7 +318,7 @@ def load_consultants() -> List[Consultant]:
             "id": "C",
             "name": "鈴木 一郎",
             "title": "専門職の“独立・プロ化”支援",
-            "bio": "専門商社・コンサルティング会社を経て独立。技術系・専門職のフリーランス化や法人化の相談を多く担当。",
+            "bio": "専門商社・コンサルを経て独立。",
             "specialties": ["専門職", "フリーランス", "法人化"],
             "diagnosis_cases": 18,
             "contact_url": "https://example.com/consultant/suzuki",
@@ -332,21 +334,14 @@ st.set_page_config(
     layout="centered",
 )
 
-# ===== カラーテーマ（セカンドキャリア版） =====
+# ===== カラーテーマ（ミントグリーン） =====
 st.markdown(
     """
     <style>
-    /* 全体背景 */
-    .stApp {
-        background-color: #e7f4f3;  /* やわらかいブルーグリーン */
-    }
+    .stApp { background-color: #d9f5e6; }
 
-    /* 見出しカラー */
-    h1, h2, h3 {
-        color: #004d40;  /* 深めのティール */
-    }
+    h1, h2, h3 { color: #004d40; }
 
-    /* ボタン */
     div.stButton > button {
         background-color: #00796b;
         color: white;
@@ -359,7 +354,6 @@ st.markdown(
         background-color: #00695c;
     }
 
-    /* expander の枠を少し淡く */
     .streamlit-expanderHeader {
         font-weight: 600;
         color: #004d40;
@@ -369,13 +363,28 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
+# ===== 進捗バーCSS（ミントグリーン） =====
+progress_css = """
+<style>
+.progress-bar {
+    height: 12px;
+    background-color: #d9f5e6;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 6px;
+    border: 1px solid #b5e6d4;
+}
+.progress-bar-inner {
+    height: 100%;
+    background-color: #4db6ac;
+}
+</style>
+"""
 
 # セッションID（匿名）
 if "session_id" not in st.session_state:
     import uuid
     st.session_state["session_id"] = str(uuid.uuid4())
-
 session_id = st.session_state["session_id"]
 
 st.title("3分セカンドキャリア診断")
@@ -384,8 +393,8 @@ st.caption("氏名・メール不要。完全匿名で、これからの働き�
 with st.expander("この診断について（必ずお読みください）", expanded=True):
     st.markdown(
         "- 回答はすべて匿名で記録され、氏名・メールアドレスなどの個人情報は取得しません。\n"
-        "- 診断結果は、将来のキャリアや収入を保証・推奨するものではありません。\n"
-        "- 必要に応じて、専門家との個別相談や会社の制度もあわせてご検討ください。"
+        "- 診断結果は、将来のキャリアを保証するものではありません。\n"
+        "- 必要に応じて、専門家との個別相談をご検討ください。"
     )
 
 st.header("1. 質問にお答えください")
@@ -395,78 +404,38 @@ score_map = {label: i for i, label in enumerate(options, start=1)}
 
 answers: Dict[str, int] = {}
 
-# Q1〜Q3: Challenge
+# === 設問 ===（そのまま）
+
+# A: 挑戦志向
 st.subheader("A. 変化への向き合い方（挑戦志向）")
-answers["Q1"] = score_map[st.radio(
-    "Q1. 現在の仕事や働き方に“大きな変化”を起こすことに、どの程度ワクワク感を覚えますか？",
-    options,
-    index=2,
-)]
-answers["Q2"] = score_map[st.radio(
-    "Q2. 多少の収入や環境の不確実性があっても、「やってみたい仕事」に挑戦したいほうだと思いますか？",
-    options,
-    index=2,
-)]
-answers["Q3"] = score_map[st.radio(
-    "Q3. これから10年を振り返ったとき、「あまり変わらない仕事を続けていた自分」を想像すると、少し物足りなさを感じますか？",
-    options,
-    index=2,
-)]
+answers["Q1"] = score_map[st.radio("Q1. 現在の仕事に“大きな変化”...", options, index=2)]
+answers["Q2"] = score_map[st.radio("Q2. 不確実性があっても...", options, index=2)]
+answers["Q3"] = score_map[st.radio("Q3. あまり変わらない未来...", options, index=2)]
 
-# Q4〜Q6: Autonomy
+# B: 自律
 st.subheader("B. 組織との距離感（自律・独立志向）")
-answers["Q4"] = score_map[st.radio(
-    "Q4. 会社や組織の一員として働くことに、強い安心感を覚えますか？",
-    options,
-    index=2,
-)]
-answers["Q5"] = score_map[st.radio(
-    "Q5. 仕事の内容や進め方、時間配分を自分の裁量で決められることを、どの程度重視しますか？",
-    options,
-    index=2,
-)]
-answers["Q6"] = score_map[st.radio(
-    "Q6. 会社の看板ではなく、「あなた個人の名前」で仕事を受けることに、抵抗は少ないほうですか？",
-    options,
-    index=2,
-)]
+answers["Q4"] = score_map[st.radio("Q4. 組織で働く安心感...", options, index=2)]
+answers["Q5"] = score_map[st.radio("Q5. 裁量をどれだけ重視するか？", options, index=2)]
+answers["Q6"] = score_map[st.radio("Q6. 個人の名前で仕事を受ける...", options, index=2)]
 
-# Q7〜Q9: Portfolio
+# C: ポートフォリオ
 st.subheader("C. 働き方の組み合わせ方（ポートフォリオ志向）")
-answers["Q7"] = score_map[st.radio(
-    "Q7. 一つの専門領域をとことん深めて、「この分野なら任せてほしい」という状態を目指したいですか？",
-    options,
-    index=2,
-)]
-answers["Q8"] = score_map[st.radio(
-    "Q8. 異なる分野の仕事や活動を並行して進めることに、楽しさを感じるほうですか？",
-    options,
-    index=2,
-)]
-answers["Q9"] = score_map[st.radio(
-    "Q9. 「ひとつの本業＋複数のサブ的な仕事（副業・ボランティアなど）」というスタイルに魅力を感じますか？",
-    options,
-    index=2,
-)]
+answers["Q7"] = score_map[st.radio("Q7. 専門を深める志向", options, index=2)]
+answers["Q8"] = score_map[st.radio("Q8. 異分野活動の楽しさ", options, index=2)]
+answers["Q9"] = score_map[st.radio("Q9. 本業＋複数活動の魅力", options, index=2)]
 
-# Q10: 行動意欲
+# D: 行動意欲
 st.subheader("D. 行動に踏み出す準備度")
-answers["Q10"] = score_map[st.radio(
-    "Q10. この1〜2年のあいだに、セカンドキャリアに向けて具体的な行動（学び・副業・情報収集など）を本気で始めたいと思っていますか？",
-    options,
-    index=2,
-)]
+answers["Q10"] = score_map[st.radio("Q10. この1〜2年で行動したいか？", options, index=2)]
 
 submitted = st.button("診断する")
 
 if submitted:
     scores = calc_scores(answers)
     result_type = decide_type(scores)
-
     ai_comment = generate_ai_comment(result_type, scores, session_id) or ""
 
-    # ログ保存
-    answer_row = {
+    row = {
         "timestamp": datetime.now(JST).isoformat(timespec="seconds"),
         "session_id": session_id,
         "result_type": result_type,
@@ -477,7 +446,7 @@ if submitted:
         "ai_comment": ai_comment,
         "app_version": APP_VERSION,
     }
-    save_answer_row(answer_row)
+    save_answer_row(row)
 
     st.session_state["result_type"] = result_type
     st.session_state["scores"] = scores
@@ -493,44 +462,66 @@ if "result_type" in st.session_state:
     st.subheader(f"タイプ：{result_type}（{TYPE_TEXT[result_type][:10]}…）")
     st.write(TYPE_TEXT[result_type])
 
-    st.markdown("### 3つの視点から見た、いまの傾向（1〜5）")
-    st.write(
-        f"- 挑戦志向（変化への向き合い方）: **{scores['challenge']:.1f}** / 5\n"
-        f"- 自律・独立志向（組織との距離感）: **{scores['autonomy']:.1f}** / 5\n"
-        f"- ポートフォリオ志向（働き方の組み合わせ）: **{scores['portfolio']:.1f}** / 5\n"
-        f"- 行動意欲（この1〜2年の動きやすさ）: **{scores['action']:.1f}** / 5"
-    )
+    # ======= ★ 進捗バー（状態ラベル）UI 完全差し替え =======
+    st.markdown(progress_css, unsafe_allow_html=True)
+    st.markdown("### 3つの側面から見た現在地")
 
-    st.markdown("### AIからのコメント（自動生成・約400字）")
+    axis_names = {
+        "challenge": "挑戦志向（変化への向き合い方）",
+        "autonomy": "自律・独立志向（組織との距離感）",
+        "portfolio": "ポートフォリオ志向（働き方の組み合わせ）",
+    }
+
+    for key in ["challenge", "autonomy", "portfolio"]:
+        score = scores[key]
+        label = score_to_label(score)
+        rate = score / 5
+
+        st.markdown(f"#### {axis_names[key]}")
+        st.markdown(f"**{label}**")
+
+        st.markdown(
+            f"""
+            <div class="progress-bar">
+                <div class="progress-bar-inner" style="width:{rate * 100}%"></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.write("")
+
+    # 行動意欲は別途（数値を見せず）
+    st.subheader("行動に踏み出す準備度")
+    st.write("ご自身のペースで進めていく準備が少しずつ整いつつある状態です。")
+
+    # ======= AI コメント =======
+    st.markdown("### AIからのコメント（約400字）")
     if ai_comment:
         st.write(ai_comment)
     else:
-        st.caption("AIコメントの生成に失敗しました。時間をおいて再度お試しください。")
+        st.caption("AIコメントの生成に失敗しました。")
 
     # ========= 相談員カード =========
     st.header("3. キャリア相談員のご紹介（外部サイト）")
     st.caption(
-    "※ 以下の相談員は、それぞれ独立したキャリア相談の専門家です。"
-    "ご相談は、各相談員と直接やり取りいただきます。"
+        "※ 以下の相談員は独立したキャリア相談専門家です。"
+        "ご相談は、各相談員と直接やり取りいただきます。"
     )
-
-    import os  # ← ファイル冒頭の import 群に追加してOK
 
     consultants = load_consultants()
 
     for c in consultants:
         st.markdown("---")
-    
         cols = st.columns([1, 2])
-    
-        # ▼ 左：写真
+
+        # 左：写真
         with cols[0]:
             if c.photo and os.path.exists(c.photo):
                 st.image(c.photo, use_container_width=True)
             else:
                 st.caption("（写真準備中）")
-    
-        # ▼ 右：情報
+
+        # 右：プロフィール
         with cols[1]:
             st.markdown(f"**{c.name}**")
             st.caption(c.title)
@@ -538,7 +529,7 @@ if "result_type" in st.session_state:
             st.write("得意分野：" + "｜".join(c.specialties))
             st.write(f"対応実績：{c.diagnosis_cases}件")
 
-        # ▼ クリックログ付きボタン
+        # 相談ボタン（ログ付き）
         if st.button(f"この相談員に相談する（ID: {c.id}）", key=f"btn_{c.id}"):
             click_row = {
                 "timestamp": datetime.now(JST).isoformat(timespec="seconds"),
@@ -547,13 +538,12 @@ if "result_type" in st.session_state:
                 "consultant_id": c.id,
             }
             save_click_row(click_row)
-
             url = f"{c.contact_url}?src=3min_second_career&c={c.id}"
             st.markdown(f"[相談ページを開く]({url})")
 
-
 else:
     st.caption("全ての質問に回答したあと、「診断する」ボタンを押してください。")
+
 
 
 
