@@ -519,24 +519,24 @@ if "result_type" in st.session_state:
     consultants = load_consultants()
 
     for c in consultants:
-    st.markdown("---")
-
-    cols = st.columns([1, 2])
-
-    # ▼ 左：写真
-    with cols[0]:
-        if c.photo and os.path.exists(c.photo):
-            st.image(c.photo, use_container_width=True)
-        else:
-            st.caption("（写真準備中）")
-
-    # ▼ 右：情報
-    with cols[1]:
-        st.markdown(f"**{c.name}**")
-        st.caption(c.title)
-        st.write(c.bio)
-        st.write("得意分野：" + "｜".join(c.specialties))
-        st.write(f"対応実績：{c.diagnosis_cases}件")
+        st.markdown("---")
+    
+        cols = st.columns([1, 2])
+    
+        # ▼ 左：写真
+        with cols[0]:
+            if c.photo and os.path.exists(c.photo):
+                st.image(c.photo, use_container_width=True)
+            else:
+                st.caption("（写真準備中）")
+    
+        # ▼ 右：情報
+        with cols[1]:
+            st.markdown(f"**{c.name}**")
+            st.caption(c.title)
+            st.write(c.bio)
+            st.write("得意分野：" + "｜".join(c.specialties))
+            st.write(f"対応実績：{c.diagnosis_cases}件")
 
         # ▼ クリックログ付きボタン
         if st.button(f"この相談員に相談する（ID: {c.id}）", key=f"btn_{c.id}"):
