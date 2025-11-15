@@ -375,10 +375,14 @@ st.markdown(
         font-weight: 500 !important;
     }
 
-    /* ボタン：文字色を白で固定 */
+    /* 🔸ボタン：文字色を白で強制（すべての button を対象） */
+    .stApp button {
+        color: #ffffff !important;
+    }
+
+    /* メインのアクションボタンのスタイル */
     div.stButton > button {
         background-color: #00796b;
-        color: #ffffff !important;
         border-radius: 999px;
         border: none;
         padding: 0.4rem 1.3rem;
@@ -386,7 +390,6 @@ st.markdown(
     }
     div.stButton > button:hover {
         background-color: #00695c;
-        color: #ffffff !important;
     }
 
     /* expander ヘッダー */
@@ -425,6 +428,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
 # セッションID（匿名）
 if "session_id" not in st.session_state:
