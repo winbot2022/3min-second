@@ -375,6 +375,13 @@ st.markdown(
         font-weight: 700 !important;
     }
 
+    /* --- caption（肩書）の色・太さを強制的に統一 --- */
+    p.caption, .caption, .stCaption {
+        color: #001a15 !important;   /* bio と同じ深いティール */
+        font-weight: 500 !important;
+        opacity: 1 !important;
+    }
+
    /* ========================== */
     /*     ボタン（白背景）       */
     /* ========================== */
