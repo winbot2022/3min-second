@@ -372,7 +372,7 @@ st.markdown(
     /* 説明文・キャプション・設問ラベルを少し濃く・太めに */
     p, .stMarkdown, .stCaption, label {
         color: #00332f !important;
-        font-weight: 500 !important;
+        font-weight: 700 !important;
     }
 
    /* ========================== */
