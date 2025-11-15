@@ -326,12 +326,50 @@ def load_consultants() -> List[Consultant]:
     return [Consultant(**d) for d in data]
 
 # ========= Streamlit アプリ本体 =========
-
 st.set_page_config(
     page_title="3分セカンドキャリア診断",
     page_icon="🧭",
     layout="centered",
 )
+
+# ===== カラーテーマ（セカンドキャリア版） =====
+st.markdown(
+    """
+    <style>
+    /* 全体背景 */
+    .stApp {
+        background-color: #e7f4f3;  /* やわらかいブルーグリーン */
+    }
+
+    /* 見出しカラー */
+    h1, h2, h3 {
+        color: #004d40;  /* 深めのティール */
+    }
+
+    /* ボタン */
+    div.stButton > button {
+        background-color: #00796b;
+        color: white;
+        border-radius: 999px;
+        border: none;
+        padding: 0.4rem 1.3rem;
+        font-weight: 600;
+    }
+    div.stButton > button:hover {
+        background-color: #00695c;
+    }
+
+    /* expander の枠を少し淡く */
+    .streamlit-expanderHeader {
+        font-weight: 600;
+        color: #004d40;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
 
 # セッションID（匿名）
 if "session_id" not in st.session_state:
@@ -472,35 +510,47 @@ if "result_type" in st.session_state:
     # ========= 相談員カード =========
     st.header("3. キャリア相談員のご紹介（外部サイト）")
     st.caption(
-        "※ 以下の相談員の方々とは、勝（VICTOR CONSULTING代表）は紹介料モデルで提携しています。"
-        "ご相談は各相談員と直接やり取りいただきます。"
+    "※ 以下の相談員は、それぞれ独立したキャリア相談の専門家です。"
+    "ご相談は、各相談員と直接やり取りいただきます。"
     )
 
+    import os  # ← ファイル冒頭の import 群に追加してOK
+
     consultants = load_consultants()
+
     for c in consultants:
-        st.markdown("---")
-        cols = st.columns([1, 2])
-        with cols[0]:
-            if c.photo:
-                st.image(c.photo, use_container_width=True)
-        with cols[1]:
-            st.markdown(f"**{c.name}**")
-            st.caption(c.title)
-            st.write(c.bio)
-            st.write("得意分野：" + "｜".join(c.specialties))
-            st.write(f"3分セカンドキャリア診断 経由の相談対応：{c.diagnosis_cases}件（累計）")
+    st.markdown("---")
 
-            if st.button(f"この相談員に相談してみる（ID: {c.id}）", key=f"btn_{c.id}"):
-                click_row = {
-                    "timestamp": datetime.now(JST).isoformat(timespec="seconds"),
-                    "session_id": session_id,
-                    "result_type": result_type,
-                    "consultant_id": c.id,
-                }
-                save_click_row(click_row)
+    cols = st.columns([1, 2])
 
-                url = f"{c.contact_url}?src=3min_second_career&c={c.id}"
-                st.markdown(f"[相談ページを開く]({url})")
+    # ▼ 左：写真
+    with cols[0]:
+        if c.photo and os.path.exists(c.photo):
+            st.image(c.photo, use_container_width=True)
+        else:
+            st.caption("（写真準備中）")
+
+    # ▼ 右：情報
+    with cols[1]:
+        st.markdown(f"**{c.name}**")
+        st.caption(c.title)
+        st.write(c.bio)
+        st.write("得意分野：" + "｜".join(c.specialties))
+        st.write(f"対応実績：{c.diagnosis_cases}件")
+
+        # ▼ クリックログ付きボタン
+        if st.button(f"この相談員に相談する（ID: {c.id}）", key=f"btn_{c.id}"):
+            click_row = {
+                "timestamp": datetime.now(JST).isoformat(timespec="seconds"),
+                "session_id": session_id,
+                "result_type": result_type,
+                "consultant_id": c.id,
+            }
+            save_click_row(click_row)
+
+            url = f"{c.contact_url}?src=3min_second_career&c={c.id}"
+            st.markdown(f"[相談ページを開く]({url})")
+
 
 else:
     st.caption("全ての質問に回答したあと、「診断する」ボタンを押してください。")
