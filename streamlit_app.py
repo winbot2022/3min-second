@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-# 3分セカンドキャリア診断 v0.3
-# - 10問（5段階） → 3軸＋行動意欲スコア
+# 3分セカンドキャリア診断 v0.4
+# - 10問（5段階） → 5軸スコア（心理・強み・働き方・条件・行動）
 # - 4タイプ（S/R/P/I）
 # - 完全匿名（会社名・メール・年齢・属性 一切なし）
 # - ChatGPT APIで約400字コメント生成（※AIコメント内にスコア・点数は出さない）
 # - Google Sheets or CSV へログ保存（ai_comment全文も含む）
 # - 相談員カード（診断件数付き）＋クリックログ
-# - 3軸診断結果を「線分＋現在地の一点」表示（数値はユーザーに見せない）
+# - 診断結果は3軸（心理・強み・働き方）を「線分＋現在地の一点」で表示（数値はユーザーに見せない）
 
 import os
 import json
@@ -20,17 +20,18 @@ from google.oauth2.service_account import Credentials
 
 # ========= 時刻・定数 =========
 JST = timezone(timedelta(hours=9))
-APP_VERSION = "second-career-v0.3"
+APP_VERSION = "second-career-v0.4"
 OPENAI_MODEL = "gpt-4o-mini"
 
 ANSWER_HEADER = [
     "timestamp",
     "session_id",
     "result_type",
-    "challenge_score",
-    "autonomy_score",
-    "portfolio_score",
-    "action_score",
+    "psychological_score",  # 変化への向き合い方（心理的準備度）
+    "identity_score",       # 自分の強み・経験の自覚度
+    "workstyle_score",      # 働き方の志向
+    "constraint_score",     # 働き方を変えやすい条件（制約の小ささ）
+    "action_score",         # 行動に踏み出す準備度
     "ai_comment",
     "app_version",
 ]
@@ -184,10 +185,11 @@ def generate_ai_comment(result_type: str, scores: Dict[str, float], session_id: 
         "出力する文章の中には一切書かないでください。"
         "あくまで、傾向をあなたが理解するためだけの材料です。\n\n"
         f"診断タイプ: {result_type}\n"
-        f"- 挑戦志向（challenge）: {scores['challenge']:.1f}\n"
-        f"- 自律・独立志向（autonomy）: {scores['autonomy']:.1f}\n"
-        f"- ポートフォリオ志向（portfolio）: {scores['portfolio']:.1f}\n"
-        f"- 行動意欲（action）: {scores['action']:.1f}\n\n"
+        f"- 心理的準備度（変化への向き合い方）: {scores['psychological']:.1f}\n"
+        f"- 強み・経験の自覚度: {scores['identity']:.1f}\n"
+        f"- 働き方の志向（自律・独立／組織・複業など）: {scores['workstyle']:.1f}\n"
+        f"- 働き方を変えやすい条件（家族・健康・時間などの制約の小ささ）: {scores['constraint']:.1f}\n"
+        f"- 行動に踏み出す準備度: {scores['action']:.1f}\n\n"
         "この情報をもとに、本人が自分のこれまでのキャリアを肯定しつつ、"
         "今後の選択肢を前向きに考えられるようなコメントを書いてください。"
         "『あなたは〜です』と決めつけすぎない表現でお願いします。"
@@ -238,42 +240,53 @@ def calc_scores(answers: Dict[str, int]) -> Dict[str, float]:
     """
     answers: Q1〜Q10 → 1〜5
     軸：
-      - challenge: Q1, Q2, Q3
-      - autonomy: Q4(r), Q5, Q6
-      - portfolio: Q7(r), Q8, Q9
-      - action: Q10
+      - psychological: Q1, Q2（変化への向き合い方）
+      - identity:      Q3, Q4（自分の強み・経験の自覚）
+      - workstyle:     Q5, Q6, Q7（働き方の志向）
+      - constraint:    Q8（制約の小ささ）
+      - action:        Q9, Q10（行動に踏み出す準備度）
     """
     def mean(vals: List[float]) -> float:
         return sum(vals) / len(vals) if vals else 0.0
 
-    def rev(v: int) -> int:
-        return 6 - v  # 1↔5, 2↔4, 3↔3
-
-    challenge = mean([answers["Q1"], answers["Q2"], answers["Q3"]])
-    autonomy = mean([rev(answers["Q4"]), answers["Q5"], answers["Q6"]])
-    portfolio = mean([rev(answers["Q7"]), answers["Q8"], answers["Q9"]])
-    action = float(answers["Q10"])
+    psychological = mean([answers["Q1"], answers["Q2"]])
+    identity      = mean([answers["Q3"], answers["Q4"]])
+    workstyle     = mean([answers["Q5"], answers["Q6"], answers["Q7"]])
+    constraint    = float(answers["Q8"])
+    action        = mean([answers["Q9"], answers["Q10"]])
 
     return {
-        "challenge": round(challenge, 2),
-        "autonomy": round(autonomy, 2),
-        "portfolio": round(portfolio, 2),
-        "action": round(action, 2),
+        "psychological": round(psychological, 2),
+        "identity":      round(identity, 2),
+        "workstyle":     round(workstyle, 2),
+        "constraint":    round(constraint, 2),
+        "action":        round(action, 2),
     }
 
 def decide_type(scores: Dict[str, float]) -> str:
-    ch = scores["challenge"]
-    au = scores["autonomy"]
-    pf = scores["portfolio"]
+    """
+    I > P > S > R の優先順位で判定
+    """
+    ps   = scores["psychological"]
+    ident = scores["identity"]
+    ws   = scores["workstyle"]
+    cons = scores["constraint"]   # 値が大きいほど「制約は小さい（動きやすい）」と解釈
+    act  = scores["action"]
 
-    # シンプルなルールベース
-    if ch >= 3.5 and au >= 3.5:
-        return "I"   # 自律・挑戦ともに高い → 独立・起業志向
-    if pf >= 3.5 and au >= 3.0:
-        return "P"   # ポートフォリオ志向高め
-    if ch <= 2.5 and au <= 3.0:
-        return "S"   # 安定志向かつ自律性は中以下
-    return "R"       # その中間 → 緩やかリスキリング
+    # 1. Independent（独立・プロ型）
+    if ws >= 4.0 and ps >= 3.6 and cons >= 3.0 and act >= 3.6:
+        return "I"
+
+    # 2. Portfolio（複業・ハイブリッド型）
+    if ps >= 3.2 and cons >= 3.0 and 3.0 <= ws <= 4.2:
+        return "P"
+
+    # 3. Specialist（専門深化・強み型）
+    if ident >= 4.0 and ws >= 3.5:
+        return "S"
+
+    # 4. Reframe（ゆるやか転身・模索型）
+    return "R"
 
 # ========= スコア → とても柔らかいラベル =========
 def soft_label(score: float) -> str:
@@ -438,7 +451,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
 # セッションID（匿名）
 if "session_id" not in st.session_state:
     import uuid
@@ -469,64 +481,64 @@ score_map = {label: i for i, label in enumerate(options, start=1)}
 
 answers: Dict[str, int] = {}
 
-# Q1〜Q3: Challenge
-st.subheader("A. 変化への向き合い方（挑戦志向）")
+# A. 心理的準備度
+st.subheader("A. 変化への向き合い方（心理的な準備度）")
 answers["Q1"] = score_map[st.radio(
-    "Q1. 現在の仕事や働き方に“大きな変化”を起こすことに、どの程度ワクワク感を覚えますか？",
+    "Q1. 今の仕事や働き方に“変化を加えること”を、どの程度ポジティブに感じますか？",
     options,
     index=2,
 )]
 answers["Q2"] = score_map[st.radio(
-    "Q2. 多少の収入や環境の不確実性があっても、「やってみたい仕事」に挑戦したいほうだと思いますか？",
-    options,
-    index=2,
-)]
-answers["Q3"] = score_map[st.radio(
-    "Q3. これから10年を振り返ったとき、「あまり変わらない仕事を続けていた自分」を想像すると、少し物足りなさを感じますか？",
+    "Q2. 収入や環境にある程度の変動があっても、「やってみたい仕事」を試してみたいと思いますか？",
     options,
     index=2,
 )]
 
-# Q4〜Q6: Autonomy
-st.subheader("B. 組織との距離感（自律・独立志向）")
-answers["Q4"] = score_map[st.radio(
-    "Q4. 会社や組織の一員として働くことに、強い安心感を覚えますか？",
+# B. 職業的アイデンティティ（強みの自覚）
+st.subheader("B. 自分の強み・経験の自覚")
+answers["Q3"] = score_map[st.radio(
+    "Q3. 自分の強みや得意分野を、第三者に言葉で説明できる自信がありますか？",
     options,
     index=2,
 )]
+answers["Q4"] = score_map[st.radio(
+    "Q4. これまでの経験の中で、他者から「それはあなたの強みだ」と評価されたスキルや役割が、はっきり思い浮かびますか？",
+    options,
+    index=2,
+)]
+
+# C. 働き方の志向
+st.subheader("C. 働き方の志向（組織との距離感・自律性）")
 answers["Q5"] = score_map[st.radio(
-    "Q5. 仕事の内容や進め方、時間配分を自分の裁量で決められることを、どの程度重視しますか？",
+    "Q5. 組織の方針に沿って働くスタイルより、自分の判断で仕事の進め方を決められる働き方に魅力を感じますか？",
     options,
     index=2,
 )]
 answers["Q6"] = score_map[st.radio(
-    "Q6. 会社の看板ではなく、「あなた個人の名前」で仕事を受けることに、抵抗は少ないほうですか？",
+    "Q6. 会社の看板ではなく、「あなた個人の名前」で仕事を受けるようなフリーランス的な働き方に対して、抵抗は少ないほうですか？",
+    options,
+    index=2,
+)]
+answers["Q7"] = score_map[st.radio(
+    "Q7. 一つの専門を深める働き方よりも、複数の仕事や活動を組み合わせる働き方のほうが、自分には合っていると感じますか？",
     options,
     index=2,
 )]
 
-# Q7〜Q9: Portfolio
-st.subheader("C. 働き方の組み合わせ方（ポートフォリオ志向）")
-answers["Q7"] = score_map[st.radio(
-    "Q7. 一つの専門領域をとことん深めて、「この分野なら任せてほしい」という状態を目指したいですか？",
-    options,
-    index=2,
-)]
+# D & E. 条件と行動の準備度
+st.subheader("D. ライフステージ・条件と行動の準備度")
 answers["Q8"] = score_map[st.radio(
-    "Q8. 異なる分野の仕事や活動を並行して進めることに、楽しさを感じるほうですか？",
+    "Q8. 今後3〜5年のあいだに、働き方を変えるうえで大きな支障となる家族・健康・時間などの制約は「それほど大きくない」と感じますか？",
     options,
     index=2,
 )]
 answers["Q9"] = score_map[st.radio(
-    "Q9. 「ひとつの本業＋複数のサブ的な仕事（副業・ボランティアなど）」というスタイルに魅力を感じますか？",
+    "Q9. この1年で、キャリアのための学びや情報収集など、小さな一歩を実際に始められそうだと感じますか？",
     options,
     index=2,
 )]
-
-# Q10: 行動意欲
-st.subheader("D. 行動に踏み出す準備度")
 answers["Q10"] = score_map[st.radio(
-    "Q10. この1〜2年のあいだに、セカンドキャリアに向けて具体的な行動（学び・副業・情報収集など）を本気で始めたいと思っていますか？",
+    "Q10. セカンドキャリアに向けて、副業・社外活動・社内での新しい役割など、何らかの具体的な行動を起こすイメージを現実的に持てていますか？",
     options,
     index=2,
 )]
@@ -544,10 +556,11 @@ if submitted:
         "timestamp": datetime.now(JST).isoformat(timespec="seconds"),
         "session_id": session_id,
         "result_type": result_type,
-        "challenge_score": scores["challenge"],
-        "autonomy_score": scores["autonomy"],
-        "portfolio_score": scores["portfolio"],
-        "action_score": scores["action"],
+        "psychological_score": scores["psychological"],
+        "identity_score":      scores["identity"],
+        "workstyle_score":     scores["workstyle"],
+        "constraint_score":    scores["constraint"],
+        "action_score":        scores["action"],
         "ai_comment": ai_comment,
         "app_version": APP_VERSION,
     }
@@ -571,12 +584,12 @@ if "result_type" in st.session_state:
     st.markdown("### 3つの側面から見た現在地（いまの感触）")
 
     axis_names = {
-        "challenge": "挑戦志向（変化への向き合い方）",
-        "autonomy": "自律・独立志向（組織との距離感）",
-        "portfolio": "ポートフォリオ志向（働き方の組み合わせ）",
+        "psychological": "変化への向き合い方（心理的準備度）",
+        "identity":      "自分の強み・経験の自覚度",
+        "workstyle":     "働き方の志向（組織との距離感・自律性）",
     }
 
-    for key in ["challenge", "autonomy", "portfolio"]:
+    for key in ["psychological", "identity", "workstyle"]:
         score = scores[key]
         label = soft_label(score)
         # 1〜5 を 0〜1 に変換（左右に「良い・悪い」の意味は持たせない）
@@ -596,7 +609,7 @@ if "result_type" in st.session_state:
         )
         st.write("")
 
-    # 行動意欲は、評価ではなく「ペースの話」としてコメントのみ
+    # 条件と行動についてのコメント（テキストのみ）
     st.subheader("行動に踏み出すペースについて")
     st.write(
         "行動の速さにも、その人なりのタイミングがあります。"
@@ -655,6 +668,7 @@ if "result_type" in st.session_state:
 
 else:
     st.caption("全ての質問に回答したあと、「診断する」ボタンを押してください。")
+
 
 
 
