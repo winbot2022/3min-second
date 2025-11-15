@@ -1,276 +1,502 @@
-# app.py
+# -*- coding: utf-8 -*-
+# 3分セカンドキャリア診断 v0.1
+# - 10問（5段階） → 3軸＋行動意欲スコア
+# - 4タイプ（S/R/P/I）
+# - 完全匿名（会社名・メール・年齢・属性 一切なし）
+# - ChatGPT APIで約400字コメント生成
+# - Google Sheets or CSV へログ保存（ai_comment全文も含む）
+# - 相談員カード（診断件数付き）＋クリックログ
+
 import os
 import json
-import random
-import traceback
-import urllib.request
-import urllib.error
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Tuple, List
+
 import streamlit as st
+import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
 
-# =========================
-# 基本設定（保存なし／画面表示のみ）
-# =========================
-st.set_page_config(page_title="3分・元気が出る名言診断", page_icon="🌤", layout="centered")
-st.title("🌤 3分・元気が出る名言診断")
-st.caption("30問からランダムに10問。回答は保存しません。POWERを押すと、その場で名言が表示されます。")
+# ========= 時刻・定数 =========
+JST = timezone(timedelta(hours=9))
+APP_VERSION = "second-career-v0.1"
+OPENAI_MODEL = "gpt-4o-mini"
 
-# ============== 環境変数（任意） ==============
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
-# エラーイベント送信先（任意。設定があればPOSTします）
-EVENTS_WEBHOOK_URL = os.getenv("EVENTS_WEBHOOK_URL", "").strip()
-
-# =========================
-# 便利: エラーイベント送信（任意）
-# =========================
-def send_error_event(code: str, detail: str = ""):
-    """
-    既存の「eventsとして、エラーコードだけ受け取る」仕様を最小維持。
-    EVENTS_WEBHOOK_URL が設定されている時のみ JSON POST。未設定なら何もしません。
-    JSON 例: {"event":"error","code":"OPENAI_CALL_FAILED","detail":"..."}
-    """
-    if not EVENTS_WEBHOOK_URL:
-        return
-    payload = {"event": "error", "code": code, "detail": detail}
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        EVENTS_WEBHOOK_URL,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            _ = resp.read()
-    except Exception:
-        # ここでさらに例外を投げない（画面側は静かに継続）
-        pass
-
-# =========================
-# 質問バンク（30問）: axis = act/conn/acc, polarity = pos/neg
-# =========================
-CHOICES = {"はい": 2, "どちらでも": 1, "いいえ": 0}
-DEFAULT_INDEX = 1
-HIGH_THRESH = 60  # 0～100のサブスコアで高い判定
-
-QUESTIONS_BANK = [
-    # --- 活力・挑戦（act）10問 ---
-    ("朝、起きたとき『今日はやってみよう』と思えることが多いですか？", "act", "pos"),
-    ("やるべきことに手をつけるまでの時間は短いほうですか？", "act", "pos"),
-    ("最近、新しいことに少しでも興味がわきますか？", "act", "pos"),
-    ("うまくいかなくても、また試してみようと思えますか？", "act", "pos"),
-    ("先延ばしが増えていると感じますか？", "act", "neg"),
-    ("今日は小さな一歩でも進めそうだと感じますか？", "act", "pos"),
-    ("目標を立てるのが少しおっくうだと感じますか？", "act", "neg"),
-    ("『まずはやってみる』と思える瞬間がありますか？", "act", "pos"),
-    ("最近、気力のバッテリーが切れがちだと感じますか？", "act", "neg"),
-    ("完璧でなくても動き出せるほうですか？", "act", "pos"),
-    # --- つながり・他者（conn）10問 ---
-    ("最近、誰かに『ありがとう』と言えましたか？", "conn", "pos"),
-    ("困ったら人に頼ってもよいと感じますか？", "conn", "pos"),
-    ("一人で抱え込みがちだと感じますか？", "conn", "neg"),
-    ("だれかの役に立てたと思える出来事がありましたか？", "conn", "pos"),
-    ("会話や雑談の機会が減っていると感じますか？", "conn", "neg"),
-    ("弱さを見せても大丈夫だと思える相手がいますか？", "conn", "pos"),
-    ("最近、孤立感を覚えることが多いですか？", "conn", "neg"),
-    ("ちいさな親切を受け取れた（または渡せた）と感じますか？", "conn", "pos"),
-    ("助けを求めるのが苦手だと感じますか？", "conn", "neg"),
-    ("人と一緒にやると元気が出やすいと感じますか？", "conn", "pos"),
-    # --- 自己受容・安らぎ（acc）10問 ---
-    ("『いまは少し休んでもいい』と思えますか？", "acc", "pos"),
-    ("最近、自分を責める回数が増えていますか？", "acc", "neg"),
-    ("自然や空模様を見て『きれいだな』と感じることがありますか？", "acc", "pos"),
-    ("うまくできない自分を許せない、と感じることが多いですか？", "acc", "neg"),
-    ("深呼吸すると少し楽になる気がしますか？", "acc", "pos"),
-    ("焦りや不安で頭がいっぱいになりがちですか？", "acc", "neg"),
-    ("『今日は今日でいい』と思える瞬間がありますか？", "acc", "pos"),
-    ("休むことに罪悪感を覚えますか？", "acc", "neg"),
-    ("小さな喜びを見つける余裕が少しありますか？", "acc", "pos"),
-    ("完璧でない自分を受け入れられそうですか？", "acc", "pos"),
+ANSWER_HEADER = [
+    "timestamp",
+    "session_id",
+    "result_type",
+    "challenge_score",
+    "autonomy_score",
+    "portfolio_score",
+    "action_score",
+    "ai_comment",
+    "app_version",
+]
+CLICK_HEADER = [
+    "timestamp",
+    "session_id",
+    "result_type",
+    "consultant_id",
 ]
 
-# =========================
-# 名言カタログ（タイプ別）
-# =========================
-QUOTE_CATALOG = {
-    "RESTART": [
-        ("夜明け前がいちばん暗い。", "英語のことわざ"),
-        ("休むことも、仕事のうち。", "レオナルド・ダ・ヴィンチ"),
-        ("ゆっくりでいい。止まらなければ、必ず着く。", "孔子『論語』意"),
-        ("嵐のあとは、道が見える。", "匿名"),
-        ("小さな前進は、偉大な停滞より価値がある。", "匿名"),
-        ("倒れても、上を向いて倒れなさい。", "チャールズ・チャップリン意"),
-    ],
-    "CHALLENGE": [
-        ("行動こそ、恐れを越える唯一の方法。", "匿名"),
-        ("できると思えばできる。思わなければできない。", "ヘンリー・フォード"),
-        ("道は歩く者にだけ姿を見せる。", "匿名"),
-        ("失敗は、より賢く再挑戦するための授業料。", "ヘンリー・フォード意"),
-        ("最初の一歩が、いちばん道を変える。", "匿名"),
-        ("やってみなければ、何も始まらない。", "アリストテレス意"),
-    ],
-    "CALM": [
-        ("花は咲く時を、自分で知っている。", "匿名"),
-        ("今日は今日を、十分に生きればいい。", "セネカ意"),
-        ("木は急がない。それでも、ちゃんと伸びている。", "匿名"),
-        ("心を静めることは、次の力を集めること。", "老子意"),
-        ("呼吸を整えよ。道はそれからでいい。", "禅語意"),
-        ("波が静まれば、水面は空を映す。", "匿名"),
-    ],
-}
-TYPE_LABELS = {
-    "RESTART": "再起の光（やさしい背中押し）",
-    "CHALLENGE": "挑戦の炎（行動の一押し）",
-    "CALM": "静かな充電（受容と整え）",
-}
+# ========= Secrets/環境変数 =========
+def read_secret(key: str, default=None):
+    try:
+        return st.secrets[key]
+    except Exception:
+        return os.environ.get(key, default)
 
-# =========================
-# スコアリング
-# =========================
-def score_item(raw_score: int, polarity: str) -> int:
-    # pos: そのまま（0-2）、neg: 逆転（2-raw）
-    return raw_score if polarity == "pos" else (2 - raw_score)
+# ========= イベント記録（簡易） =========
+def report_event(level: str, message: str, payload: dict | None = None):
+    if not payload:
+        payload = {}
+    ts = datetime.now(JST).isoformat(timespec="seconds")
+    print(f"[{ts}] [{level}] {message} {payload}")
 
-def to_percent(subscores) -> int:
-    # subscoresは0-2の合計（設問数×0..2） → 0-100へ
-    max_total = len(subscores) * 2
-    total = sum(subscores)
-    if max_total == 0:
-        return 0
-    return int(round(total / max_total * 100))
+# ========= Google Sheets / CSV 保存ユーティリティ =========
+def _get_gspread_client(service_json_str: str):
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    info = json.loads(service_json_str)
+    creds = Credentials.from_service_account_info(info, scopes=scopes)
+    gc = gspread.authorize(creds)
+    return gc
 
-def pick_type(act, conn, acc) -> str:
-    # 単純・頑健：高い軸があればそちら、拮抗/全体低めならRESTART
-    if act >= HIGH_THRESH and act >= acc and act >= conn:
-        return "CHALLENGE"
-    if acc >= HIGH_THRESH and acc >= act and acc >= conn:
-        return "CALM"
-    return "RESTART"
+def _append_to_sheet(
+    row_dict: dict,
+    spreadsheet_id: str,
+    service_json_str: str,
+    sheet_title: str,
+    header: List[str],
+):
+    gc = _get_gspread_client(service_json_str)
+    sh = gc.open_by_key(spreadsheet_id)
+    try:
+        ws = sh.worksheet(sheet_title)
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=sheet_title, rows=2000, cols=20)
+        ws.append_row(header)
 
-# =========================
-# OpenAIで最適名言を選ぶ（キーなし→ローカル代替）
-# =========================
-def select_quote_with_ai(summary, candidates):
-    """
-    summary: {"act": int, "conn": int, "acc": int, "type": str, "answers":[{q,axis,polarity,choice,score}]}
-    candidates: [{"text": "...", "source": "..."}]  # 3件程度
-    return: {"text": "...", "source": "...", "comment": "..."}  # commentは短い補足
-    """
-    if not OPENAI_API_KEY:
-        # ローカル代替（最初の候補＋タイプに応じた短評）
-        base = {
-            "RESTART": "いまは息を整えて、小さな一歩を。ゆっくりでも進めば必ず変わります。",
-            "CHALLENGE": "考えるよりまず一歩。小さく動くほど、恐れは小さくなります。",
-            "CALM": "休むことは前進の準備。深呼吸から、静かな力が戻ってきます。",
-        }[summary["type"]]
-        return {"text": candidates[0]["text"], "source": candidates[0]["source"], "comment": base}
+    values = ws.get_all_values()
+    if not values:
+        ws.append_row(header)
 
+    record = [row_dict.get(k, "") for k in header]
+    ws.append_row(record, value_input_option="USER_ENTERED")
+
+def _append_to_csv(row_dict: dict, csv_path: str, header: List[str]):
+    df = pd.DataFrame([row_dict])
+    if os.path.exists(csv_path):
+        df.to_csv(csv_path, mode="a", header=False, index=False, encoding="utf-8")
+    else:
+        df.to_csv(csv_path, index=False, encoding="utf-8")
+
+def save_answer_row(row: dict):
+    secret_json     = read_secret("GOOGLE_SERVICE_JSON", None)
+    if not secret_json:
+        b64 = read_secret("GOOGLE_SERVICE_JSON_BASE64", None)
+        if b64:
+            try:
+                import base64
+                secret_json = base64.b64decode(b64).decode("utf-8")
+            except Exception as e:
+                report_event("ERROR", "Base64 decode error", {"e": str(e)})
+
+    secret_sheet_id = read_secret("SPREADSHEET_ID", None)
+
+    try:
+        if secret_json and secret_sheet_id:
+            _append_to_sheet(
+                row,
+                spreadsheet_id=secret_sheet_id,
+                service_json_str=secret_json,
+                sheet_title="answers_second_career",
+                header=ANSWER_HEADER,
+            )
+        else:
+            _append_to_csv(row, "answers_second_career.csv", ANSWER_HEADER)
+    except Exception as e:
+        report_event("WARN", "save_answer_row error, fallback CSV", {"e": str(e)})
+        _append_to_csv(row, "answers_second_career.csv", ANSWER_HEADER)
+
+def save_click_row(row: dict):
+    secret_json     = read_secret("GOOGLE_SERVICE_JSON", None)
+    if not secret_json:
+        b64 = read_secret("GOOGLE_SERVICE_JSON_BASE64", None)
+        if b64:
+            try:
+                import base64
+                secret_json = base64.b64decode(b64).decode("utf-8")
+            except Exception as e:
+                report_event("ERROR", "Base64 decode error", {"e": str(e)})
+
+    secret_sheet_id = read_secret("SPREADSHEET_ID", None)
+
+    try:
+        if secret_json and secret_sheet_id:
+            _append_to_sheet(
+                row,
+                spreadsheet_id=secret_sheet_id,
+                service_json_str=secret_json,
+                sheet_title="clicks_second_career",
+                header=CLICK_HEADER,
+            )
+        else:
+            _append_to_csv(row, "clicks_second_career.csv", CLICK_HEADER)
+    except Exception as e:
+        report_event("WARN", "save_click_row error, fallback CSV", {"e": str(e)})
+        _append_to_csv(row, "clicks_second_career.csv", CLICK_HEADER)
+
+# ========= OpenAI クライアント =========
+def _openai_client(api_key: str):
     try:
         from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        sys = (
-            "あなたは短い励ましに長けた編集者です。ユーザーの回答傾向（act/conn/accスコアとタイプ）を読み、"
-            "提示された候補の中から“いま最も刺さる”名言を厳選してください。"
-            "出力はJSONのみ。キーは text, source, comment。commentは80〜120字の日本語で、"
-            "優しく具体的な一歩を促す短評にしてください。余計な文は出さないでください。"
-        )
-        usr = {"summary": summary, "candidates": candidates}
-        resp = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": sys},
-                {"role": "user", "content": json.dumps(usr, ensure_ascii=False)}
-            ],
-            temperature=0.4,
-            max_tokens=300,
-        )
-        content = resp.choices[0].message.content.strip()
-        data = json.loads(content)
-        if not all(k in data for k in ("text", "source", "comment")):
-            raise ValueError("Invalid AI response schema")
-        return data
+        return "new", OpenAI(api_key=api_key)
+    except Exception:
+        import openai
+        openai.api_key = api_key
+        return "old", openai
+
+def generate_ai_comment(result_type: str, scores: Dict[str, float], session_id: str) -> str | None:
+    api_key = read_secret("OPENAI_API_KEY", None)
+    if not api_key:
+        report_event("WARN", "OPENAI_API_KEY not set", {})
+        return None
+
+    system_prompt = (
+        "あなたは40〜50代の会社員・管理職向けに、"
+        "セカンドキャリアを一緒に考えるキャリアアドバイザーです。"
+        "診断結果をもとに、相手を評価・断定せず、"
+        "ねぎらいと安心感のあるトーンでコメントを書いてください。"
+        "医療・投資・法律などの具体アドバイスには踏み込まず、"
+        "自己理解を深めるための示唆にとどめてください。"
+        "400字前後の日本語で書いてください。"
+    )
+
+    user_prompt = (
+        f"診断結果はタイプ: {result_type} です。\n"
+        f"スコアは以下の通りです。\n"
+        f"- 挑戦志向（challenge）: {scores['challenge']:.1f}\n"
+        f"- 自律・独立志向（autonomy）: {scores['autonomy']:.1f}\n"
+        f"- ポートフォリオ志向（portfolio）: {scores['portfolio']:.1f}\n"
+        f"- 行動意欲（action）: {scores['action']:.1f}\n\n"
+        "この結果を踏まえて、本人が自分のこれまでのキャリアを肯定しつつ、"
+        "今後の選択肢を前向きに考えられるようなコメントを書いてください。"
+        "『あなたは〜です』と決めつけすぎない表現でお願いします。"
+        f"\nセッションID: {session_id}（ログ用、文中に繰り返す必要はありません）"
+    )
+
+    mode, client = _openai_client(api_key)
+
+    try:
+        if mode == "new":
+            resp = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",    "content": user_prompt},
+                ],
+                max_tokens=800,
+                temperature=0.7,
+            )
+            return resp.choices[0].message.content.strip()
+        else:
+            resp = client.ChatCompletion.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",    "content": user_prompt},
+                ],
+                max_tokens=800,
+                temperature=0.7,
+            )
+            return resp.choices[0].message["content"].strip()
     except Exception as e:
-        # 失敗時はイベント送信＋フォールバック
-        send_error_event("OPENAI_CALL_FAILED", f"{type(e).__name__}: {e}")
-        base = {
-            "RESTART": "いまは息を整えて、小さな一歩を。ゆっくりでも進めば必ず変わります。",
-            "CHALLENGE": "考えるよりまず一歩。小さく動くほど、恐れは小さくなります。",
-            "CALM": "休むことは前進の準備。深呼吸から、静かな力が戻ってきます.",
-        }[summary["type"]]
-        return {"text": candidates[0]["text"], "source": candidates[0]["source"], "comment": base}
+        report_event("ERROR", "AI comment error", {"e": str(e)})
+        return None
 
-# =========================
-# ランダム10問の選出（セッション固定）
-# =========================
-if "question_indices" not in st.session_state:
-    st.session_state.question_indices = random.sample(range(len(QUESTIONS_BANK)), 10)
+# ========= 診断ロジック =========
 
-indices = st.session_state.question_indices
+TYPE_TEXT = {
+    "S": "いまの延長線上で役割や働き方を少しずつ調整しながら、安定的にキャリアを深めていくスタイルがフィットしやすいタイプです。",
+    "R": "すぐに大きく動くよりも、学び直しや副業など、小さな実験を積み重ねながら数年かけてキャリアをシフトしていくタイプです。",
+    "P": "ひとつの軸にしばられず、複数の仕事や活動を組み合わせて、自分らしいポートフォリオをつくっていくスタイルが向きやすいタイプです。",
+    "I": "自分の看板で仕事をつくることへの関心が強く、中長期的に独立や起業、個人プロとしての活動も選択肢になりやすいタイプです。",
+}
 
-with st.form("diagnosis"):
-    st.subheader("質問（ランダム10問）")
-    answers = []  # (text, axis, polarity, choice_label, scored_value)
-    for i, idx in enumerate(indices, start=1):
-        qtext, axis, polarity = QUESTIONS_BANK[idx]
-        choice = st.radio(
-            f"Q{i}. {qtext}",
-            list(CHOICES.keys()),
-            horizontal=True,
-            index=DEFAULT_INDEX
-        )
-        raw = CHOICES[choice]
-        scored = score_item(raw, polarity)
-        answers.append((qtext, axis, polarity, choice, scored))
+def calc_scores(answers: Dict[str, int]) -> Dict[str, float]:
+    """
+    answers: Q1〜Q10 → 1〜5
+    軸：
+      - challenge: Q1, Q2, Q3
+      - autonomy: Q4(r), Q5, Q6
+      - portfolio: Q7(r), Q8, Q9
+      - action: Q10
+    """
+    def mean(vals: List[float]) -> float:
+        return sum(vals) / len(vals) if vals else 0.0
 
-    # ========== POWER ボタン ==========
-    # ⏻ (power symbol) / "POWER"
-    submitted = st.form_submit_button("⏻  POWER", use_container_width=True)
+    def rev(v: int) -> int:
+        return 6 - v  # 1↔5, 2↔4, 3↔3
+
+    challenge = mean([answers["Q1"], answers["Q2"], answers["Q3"]])
+    autonomy = mean([rev(answers["Q4"]), answers["Q5"], answers["Q6"]])
+    portfolio = mean([rev(answers["Q7"]), answers["Q8"], answers["Q9"]])
+    action = float(answers["Q10"])
+
+    return {
+        "challenge": round(challenge, 2),
+        "autonomy": round(autonomy, 2),
+        "portfolio": round(portfolio, 2),
+        "action": round(action, 2),
+    }
+
+def decide_type(scores: Dict[str, float]) -> str:
+    ch = scores["challenge"]
+    au = scores["autonomy"]
+    pf = scores["portfolio"]
+    ac = scores["action"]
+
+    # シンプルなルールベース
+    if ch >= 3.5 and au >= 3.5:
+        return "I"   # 自律・挑戦ともに高い → 独立・起業志向
+    if pf >= 3.5 and au >= 3.0:
+        return "P"   # ポートフォリオ志向高め
+    if ch <= 2.5 and au <= 3.0:
+        return "S"   # 安定志向かつ自律性は中以下
+    return "R"       # その中間 → 緩やかリスキリング
+
+# ========= 相談員データ =========
+
+class Consultant:
+    def __init__(self, cid: str, name: str, title: str,
+                 bio: str, specialties: List[str],
+                 diagnosis_cases: int, contact_url: str, photo: str | None = None):
+        self.id = cid
+        self.name = name
+        self.title = title
+        self.bio = bio
+        self.specialties = specialties
+        self.diagnosis_cases = diagnosis_cases
+        self.contact_url = contact_url
+        self.photo = photo
+
+def load_consultants() -> List[Consultant]:
+    # ここは後で実データに差し替えればOK
+    data = [
+        {
+            "id": "A",
+            "name": "山田 太郎",
+            "title": "50代管理職の“ゆるやか転身”支援",
+            "bio": "大手メーカーで30年勤務後、独立。管理職から専門職・フリーランスへの移行を中心に、延べ300名以上のキャリア相談を実施。",
+            "specialties": ["50代管理職", "セミリタイア", "副業からの独立"],
+            "diagnosis_cases": 34,
+            "contact_url": "https://example.com/consultant/yamada",
+            "photo": None,
+        },
+        {
+            "id": "B",
+            "name": "佐藤 花子",
+            "title": "40代女性の“キャリアと暮らし”両立支援",
+            "bio": "人事・キャリア支援歴15年。子育てと仕事の両立、地方移住、副業など、ライフイベントとキャリアの両立をサポート。",
+            "specialties": ["40代女性", "地方移住", "パラレルワーク"],
+            "diagnosis_cases": 21,
+            "contact_url": "https://example.com/consultant/sato",
+            "photo": None,
+        },
+        {
+            "id": "C",
+            "name": "鈴木 一郎",
+            "title": "専門職の“独立・プロ化”支援",
+            "bio": "専門商社・コンサルティング会社を経て独立。技術系・専門職のフリーランス化や法人化の相談を多く担当。",
+            "specialties": ["専門職", "フリーランス", "法人化"],
+            "diagnosis_cases": 18,
+            "contact_url": "https://example.com/consultant/suzuki",
+            "photo": None,
+        },
+    ]
+    return [Consultant(**d) for d in data]
+
+# ========= Streamlit アプリ本体 =========
+
+st.set_page_config(
+    page_title="3分セカンドキャリア診断",
+    page_icon="🧭",
+    layout="centered",
+)
+
+# セッションID（匿名）
+if "session_id" not in st.session_state:
+    import uuid
+    st.session_state["session_id"] = str(uuid.uuid4())
+
+session_id = st.session_state["session_id"]
+
+st.title("3分セカンドキャリア診断")
+st.caption("氏名・メール不要。完全匿名で、これからの働き方のヒントを整理します。")
+
+with st.expander("この診断について（必ずお読みください）", expanded=True):
+    st.markdown(
+        "- 回答はすべて匿名で記録され、氏名・メールアドレスなどの個人情報は取得しません。\n"
+        "- 診断結果は、将来のキャリアや収入を保証・推奨するものではありません。\n"
+        "- 必要に応じて、専門家との個別相談や会社の制度もあわせてご検討ください。"
+    )
+
+st.header("1. 質問にお答えください")
+
+options = ["まったく当てはまらない", "あまり当てはまらない", "どちらともいえない", "やや当てはまる", "とても当てはまる"]
+score_map = {label: i for i, label in enumerate(options, start=1)}
+
+answers: Dict[str, int] = {}
+
+# Q1〜Q3: Challenge
+st.subheader("A. 変化への向き合い方（挑戦志向）")
+answers["Q1"] = score_map[st.radio(
+    "Q1. 現在の仕事や働き方に“大きな変化”を起こすことに、どの程度ワクワク感を覚えますか？",
+    options,
+    index=2,
+)]
+answers["Q2"] = score_map[st.radio(
+    "Q2. 多少の収入や環境の不確実性があっても、「やってみたい仕事」に挑戦したいほうだと思いますか？",
+    options,
+    index=2,
+)]
+answers["Q3"] = score_map[st.radio(
+    "Q3. これから10年を振り返ったとき、「あまり変わらない仕事を続けていた自分」を想像すると、少し物足りなさを感じますか？",
+    options,
+    index=2,
+)]
+
+# Q4〜Q6: Autonomy
+st.subheader("B. 組織との距離感（自律・独立志向）")
+answers["Q4"] = score_map[st.radio(
+    "Q4. 会社や組織の一員として働くことに、強い安心感を覚えますか？",
+    options,
+    index=2,
+)]
+answers["Q5"] = score_map[st.radio(
+    "Q5. 仕事の内容や進め方、時間配分を自分の裁量で決められることを、どの程度重視しますか？",
+    options,
+    index=2,
+)]
+answers["Q6"] = score_map[st.radio(
+    "Q6. 会社の看板ではなく、「あなた個人の名前」で仕事を受けることに、抵抗は少ないほうですか？",
+    options,
+    index=2,
+)]
+
+# Q7〜Q9: Portfolio
+st.subheader("C. 働き方の組み合わせ方（ポートフォリオ志向）")
+answers["Q7"] = score_map[st.radio(
+    "Q7. 一つの専門領域をとことん深めて、「この分野なら任せてほしい」という状態を目指したいですか？",
+    options,
+    index=2,
+)]
+answers["Q8"] = score_map[st.radio(
+    "Q8. 異なる分野の仕事や活動を並行して進めることに、楽しさを感じるほうですか？",
+    options,
+    index=2,
+)]
+answers["Q9"] = score_map[st.radio(
+    "Q9. 「ひとつの本業＋複数のサブ的な仕事（副業・ボランティアなど）」というスタイルに魅力を感じますか？",
+    options,
+    index=2,
+)]
+
+# Q10: 行動意欲
+st.subheader("D. 行動に踏み出す準備度")
+answers["Q10"] = score_map[st.radio(
+    "Q10. この1〜2年のあいだに、セカンドキャリアに向けて具体的な行動（学び・副業・情報収集など）を本気で始めたいと思っていますか？",
+    options,
+    index=2,
+)]
+
+submitted = st.button("診断する")
 
 if submitted:
-    try:
-        # サブスコア算出（今回の10問に対して）
-        act_scores = [a[4] for a in answers if a[1] == "act"]
-        conn_scores = [a[4] for a in answers if a[1] == "conn"]
-        acc_scores = [a[4] for a in answers if a[1] == "acc"]
+    scores = calc_scores(answers)
+    result_type = decide_type(scores)
 
-        act = to_percent(act_scores)
-        conn = to_percent(conn_scores)
-        acc = to_percent(acc_scores)
+    ai_comment = generate_ai_comment(result_type, scores, session_id) or ""
 
-        user_type = pick_type(act, conn, acc)
+    # ログ保存
+    answer_row = {
+        "timestamp": datetime.now(JST).isoformat(timespec="seconds"),
+        "session_id": session_id,
+        "result_type": result_type,
+        "challenge_score": scores["challenge"],
+        "autonomy_score": scores["autonomy"],
+        "portfolio_score": scores["portfolio"],
+        "action_score": scores["action"],
+        "ai_comment": ai_comment,
+        "app_version": APP_VERSION,
+    }
+    save_answer_row(answer_row)
 
-        # 候補（タイプ毎にシャッフル→上位3件）
-        cands = QUOTE_CATALOG[user_type][:]
-        random.shuffle(cands)
-        top_candidates = [{"text": t, "source": s} for (t, s) in cands[:3]]
+    st.session_state["result_type"] = result_type
+    st.session_state["scores"] = scores
+    st.session_state["ai_comment"] = ai_comment
 
-        summary = {
-            "act": act, "conn": conn, "acc": acc, "type": user_type,
-            "answers": [{"q": a[0], "axis": a[1], "polarity": a[2], "choice": a[3], "score": a[4]} for a in answers]
-        }
+# ========= 結果表示 =========
+if "result_type" in st.session_state:
+    result_type = st.session_state["result_type"]
+    scores = st.session_state["scores"]
+    ai_comment = st.session_state["ai_comment"]
 
-        result = select_quote_with_ai(summary, top_candidates)
+    st.header("2. あなたの診断結果")
+    st.subheader(f"タイプ：{result_type}（{TYPE_TEXT[result_type][:10]}…）")
+    st.write(TYPE_TEXT[result_type])
 
-        st.success("診断が完了しました。データは保存していません。")
-        with st.container(border=True):
-            st.markdown(f"**タイプ**：{TYPE_LABELS[user_type]}")
-            st.markdown(f"**あなたに贈る一言**：\n\n> **{result['text']}**\n\n— *{result['source']}*")
-            st.markdown(f"**ひとこと解説**：{result['comment']}")
+    st.markdown("### 3つの視点から見た、いまの傾向（1〜5）")
+    st.write(
+        f"- 挑戦志向（変化への向き合い方）: **{scores['challenge']:.1f}** / 5\n"
+        f"- 自律・独立志向（組織との距離感）: **{scores['autonomy']:.1f}** / 5\n"
+        f"- ポートフォリオ志向（働き方の組み合わせ）: **{scores['portfolio']:.1f}** / 5\n"
+        f"- 行動意欲（この1〜2年の動きやすさ）: **{scores['action']:.1f}** / 5"
+    )
 
-        with st.expander("サブスコアを見る（任意）"):
-            st.write({
-                "活力・挑戦（activation）": act,
-                "つながり（connection）": conn,
-                "自己受容（acceptance）": acc
-            })
+    st.markdown("### AIからのコメント（自動生成・約400字）")
+    if ai_comment:
+        st.write(ai_comment)
+    else:
+        st.caption("AIコメントの生成に失敗しました。時間をおいて再度お試しください。")
 
-        st.caption("※本ツールは診断・医療行為ではありません。今日の気持ちに寄り添う“言葉の処方箋”です。")
+    # ========= 相談員カード =========
+    st.header("3. キャリア相談員のご紹介（外部サイト）")
+    st.caption(
+        "※ 以下の相談員の方々とは、勝（VICTOR CONSULTING代表）は紹介料モデルで提携しています。"
+        "ご相談は各相談員と直接やり取りいただきます。"
+    )
 
-    except Exception as e:
-        # 画面にやさしく表示＋イベント送信
-        err_detail = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
-        send_error_event("APP_RUNTIME_ERROR", err_detail)
-        st.error("申し訳ありません。処理中にエラーが発生しました。もう一度お試しください。")
+    consultants = load_consultants()
+    for c in consultants:
+        st.markdown("---")
+        cols = st.columns([1, 2])
+        with cols[0]:
+            if c.photo:
+                st.image(c.photo, use_container_width=True)
+        with cols[1]:
+            st.markdown(f"**{c.name}**")
+            st.caption(c.title)
+            st.write(c.bio)
+            st.write("得意分野：" + "｜".join(c.specialties))
+            st.write(f"3分セカンドキャリア診断 経由の相談対応：{c.diagnosis_cases}件（累計）")
+
+            if st.button(f"この相談員に相談してみる（ID: {c.id}）", key=f"btn_{c.id}"):
+                click_row = {
+                    "timestamp": datetime.now(JST).isoformat(timespec="seconds"),
+                    "session_id": session_id,
+                    "result_type": result_type,
+                    "consultant_id": c.id,
+                }
+                save_click_row(click_row)
+
+                url = f"{c.contact_url}?src=3min_second_career&c={c.id}"
+                st.markdown(f"[相談ページを開く]({url})")
+
+else:
+    st.caption("全ての質問に回答したあと、「診断する」ボタンを押してください。")
+
 
 
 
