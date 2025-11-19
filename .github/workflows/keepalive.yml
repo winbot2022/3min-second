@@ -1,0 +1,16 @@
+name: Keep Streamlit App Warm
+
+on:
+  schedule:
+    # 12時間おきに実行（UTC 0時・12時 → JST 9時・21時）
+    - cron: "0 */12 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Curl Streamlit app (3min-second)
+        run: |
+          curl -sS "https://3min-second-bhbfvumv2lbajcgjeedvxz.streamlit.app/" > /dev/null
