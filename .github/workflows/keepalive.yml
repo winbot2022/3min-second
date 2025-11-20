@@ -2,8 +2,8 @@ name: Keep Streamlit App Warm
 
 on:
   schedule:
-    # 12時間おきに実行（UTC 0時・12時 → JST 9時・21時）
-    - cron: "0 */12 * * *"
+    # 3時間おきに実行（UTC 0時・12時 → JST 9時・21時）
+    - cron: "15 */3 * * *"
   workflow_dispatch:
 
 jobs:
