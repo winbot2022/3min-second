@@ -4,7 +4,7 @@ on:
   schedule:
     # 毎日2回、12時間ごとに実行（Streamlitのスリープ間隔を考慮）
     # ※最初はテストのため、cron: '0 */1 * * *' (1時間ごと) で試すことを推奨
-    - cron: '0 */1 * * *' 
+    - cron: '0/15 * * * *' 
   workflow_dispatch:
 
 jobs:
