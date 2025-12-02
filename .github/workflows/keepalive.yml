@@ -1,16 +1,36 @@
-name: Keep Streamlit App Warm
+name: Keep Streamlit App Awake (Force Commit)
 
 on:
   schedule:
-    #30分おきに実行（UTC 0時・12時 → JST 9時・21時）
-    - cron: "*/30 * * * *"
+    # 毎日2回、12時間ごとに実行（Streamlitのスリープ間隔を考慮）
+    # ※最初はテストのため、cron: '0 */1 * * *' (1時間ごと) で試すことを推奨
+    - cron: '0 */1 * * *' 
   workflow_dispatch:
 
 jobs:
-  ping:
+  commit:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Curl Streamlit app (3min-second)
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # 【必須】PAT（パーソナルアクセストークン）を使用し書き込み権限を与える
+          token: ${{ secrets.GH_PAT_TOKEN }} 
+          
+      - name: Create and Commit Ping File
         run: |
-          curl -sS "https://3min-second-bhbfvumv2lbajcgjeedvxz.streamlit.app/" > /dev/null
+          # タイムスタンプをファイルに書き込み、変更を保証
+          echo "Streamlit Ping: $(date +%Y-%m-%d\ %H:%M:%S)" > .streamlit_ping_log
+          
+          # Gitユーザーを設定 (botとして動作させる)
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          
+          # 変更をステージング
+          git add .streamlit_ping_log
+          
+          # コミット実行
+          git commit -m "Automated Streamlit keep-awake push (Refreshed at $(date +%H:%M))"
+          
+          # プッシュ実行
+          git push
