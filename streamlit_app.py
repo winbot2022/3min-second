@@ -630,48 +630,38 @@ if "result_type" in st.session_state:
         st.write(ai_comment)
     else:
         st.caption("AIコメントの生成に失敗しました。時間をおいて再度お試しください。")
-
-    # ========= 相談員カード =========
-    st.header("3. キャリア相談員のご紹介（外部サイト）")
-    st.caption(
-        "※ 以下の相談員は、それぞれ独立したキャリア相談の専門家です。"
-        "ご相談は、各相談員と直接やり取りいただきます。"
+    # ========= ウェイティングリスト案内 =========
+    st.header("3. 専門家による個別キャリア相談（ウェイティングリスト受付中）")
+    
+    st.markdown("### 大切なお知らせ")
+    
+    st.write(
+        "現在、本サービスでは専門家による個別相談体制を順次整備しております。"
+        "診断結果をもとに、「これからの具体的なアクションを専門家と整理したい」"
+        "「個別の相談に乗ってほしい」という方は、無料のウェイティングリストへご登録ください。"
     )
-
-    consultants = load_consultants()
-
-    for c in consultants:
-        st.markdown("---")
-
-        cols = st.columns([1, 2])
-
-        # 左：写真
-        with cols[0]:
-            if c.photo and os.path.exists(c.photo):
-                st.image(c.photo, use_container_width=True)
-            else:
-                st.caption("（写真準備中）")
-
-        # 右：情報
-        with cols[1]:
-            st.markdown(f"**{c.name}**")
-            st.caption(c.title)
-            st.write(c.bio)
-            st.write("得意分野：" + "｜".join(c.specialties))
-            st.write(f"対応実績：{c.diagnosis_cases}件")
-
-        # クリックログ付きボタン
-        if st.button(f"この相談員に相談する（ID: {c.id}）", key=f"btn_{c.id}"):
-            click_row = {
-                "timestamp": datetime.now(JST).isoformat(timespec="seconds"),
-                "session_id": session_id,
-                "result_type": result_type,
-                "consultant_id": c.id,
-            }
-            save_click_row(click_row)
-
-            url = f"{c.contact_url}?src=3min_second_career&c={c.id}"
-            st.markdown(f"[相談ページを開く]({url})")
+    
+    st.write(
+        "ご登録いただいた方には、相談体制の準備が整い次第、"
+        "優先的にご案内いたします。"
+    )
+    
+    st.markdown("### ウェイティングリストに登録するメリット")
+    
+    st.markdown(
+        """
+    - **優先案内**：相談枠が準備できた際、一般案内の前に優先的にお知らせします。
+    - **完全無料**：ウェイティングリストへの登録、および初期案内に費用はかかりません。
+    - **安心のサポート**：人生後半のキャリア支援に関心を持つ専門家との相談機会をご案内します。無理な勧誘等は行いません。
+    """
+    )
+    
+    WAITING_LIST_URL = "https://forms.gle/ここにGoogleフォームURLを入れる"
+    
+    st.link_button(
+        "相談開始のお知らせを受け取る（無料）",
+        WAITING_LIST_URL
+    )
 
 else:
     st.caption("全ての質問に回答したあと、「診断する」ボタンを押してください。")
