@@ -656,11 +656,26 @@ if "result_type" in st.session_state:
     """
     )
     
-    WAITING_LIST_URL = "https://docs.google.com/forms/d/e/1FAIpQLSeFS-IAkVAGw2P8DpInu37mo4GNq-clxDYxi-fkbgScqXY3Uw/viewform?usp=publish-editor"
+    from urllib.parse import urlencode
+
+    TYPE_FORM_VALUE = {
+        "R": "Reframe（ゆるやか転身・模索型）",
+        "S": "Specialist（専門深化・強み型）",
+        "P": "Portfolio（複業・ハイブリッド型）",
+        "I": "Independent（独立・プロ型）",
+    }
+    
+    GOOGLE_FORM_BASE_URL = "https://docs.google.com/forms/d/e/1FAIpQLSeFS-IAkVAGw2P8DpInu37mo4GNq-clxDYxi-fkbgScqXY3Uw/viewform"
+    TYPE_ENTRY_ID = "entry.1399344778"
+    
+    waiting_url = GOOGLE_FORM_BASE_URL + "?" + urlencode({
+        "usp": "pp_url",
+        TYPE_ENTRY_ID: TYPE_FORM_VALUE[result_type],
+    })
     
     st.link_button(
         "相談開始のお知らせを受け取る（無料）",
-        WAITING_LIST_URL
+        waiting_url
     )
 
 else:
