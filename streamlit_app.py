@@ -656,7 +656,7 @@ if "result_type" in st.session_state:
     """
     )
     
-    WAITING_LIST_URL = "https://forms.gle/ここにGoogleフォームURLを入れる"
+    WAITING_LIST_URL = "https://docs.google.com/forms/d/e/1FAIpQLSeFS-IAkVAGw2P8DpInu37mo4GNq-clxDYxi-fkbgScqXY3Uw/viewform?usp=publish-editor"
     
     st.link_button(
         "相談開始のお知らせを受け取る（無料）",
